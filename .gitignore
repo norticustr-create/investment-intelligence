@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist/
+build/
+coverage/
+
+# Environment and sensitive secrets
+.env*
+!.env.example
+*.pem
+*.key
+token*.json
+credentials*.json
+
+# Backups and historical safety archives
+backups/
+*.bak
+*backup*
+*.pre_*
+*.tmp
+
+# Internal local audit reports
+PHASE*.md
+DECISION_ENGINE*.md
+MIGRATION_AUDIT.md
+INTEGRATION_CONTRACT_REVIEW.md
+SYNTHETIC_PORTFOLIO_EVALUATION.md
+PROFIT_REALIZATION_REINVESTMENT_DESIGN.md
+
+# IDE, Editor, and Agent internal metadata
+.vscode/
+.idea/
+.antigravity/
+.DS_Store
+Thumbs.db
+*.log
