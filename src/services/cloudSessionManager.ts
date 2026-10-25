@@ -21,6 +21,7 @@ import { CloudApiClient, CloudApiError, createCloudApiClient } from './cloudApiC
 import { PortfolioSessionState } from '../types/investment';
 import { getInitialSyntheticSessionState } from '../utils/snapshotLoader';
 import { getCloudConfig, DEFAULT_CLOUD_TIMEOUT_MS } from '../config/cloudConfig';
+import { integrateIntelligenceIntoHoldings } from '../adapters/investmentAgentAdapter';
 
 export interface CloudSessionErrorState {
   message: string;
@@ -223,6 +224,119 @@ export class CloudSessionManager {
         canRetry: true,
         timestamp: new Date().toISOString()
       };
+      this.notifyState(currentSession.mode);
+      return { success: false, error: msg };
+    } finally {
+      this.isFetching = false;
+      this.activeAbortController = null;
+      this.notifyState(currentSession.mode);
+    }
+  }
+
+  /**
+   * Fetches AI Asset Intelligence reports from GET /api/intelligence and
+   * merges verified statutory/ecosystem findings and thesis evaluations
+   * into active holdings.
+   */
+  public async fetchCloudIntelligence(
+    currentSession: PortfolioSessionState,
+    setSessionState: (newState: PortfolioSessionState) => void,
+    options: { forceRefresh?: boolean; maxItemsPerAsset?: number } = {}
+  ): Promise<{ success: boolean; error?: string; state?: PortfolioSessionState }> {
+    if (this.isFetching) {
+      const busyMsg = 'An intelligence analysis request is already in progress. Please wait.';
+      return { success: false, error: busyMsg };
+    }
+
+    const idToken = this.identityService.getIdToken();
+    if (!idToken) {
+      const noTokenMsg = 'Please sign in with your authorized Google account before requesting intelligence reports.';
+      this.currentError = {
+        message: noTokenMsg,
+        kind: 'UNAUTHORIZED',
+        status: 401,
+        canRetry: false,
+        timestamp: new Date().toISOString()
+      };
+      this.notifyState(currentSession.mode);
+      return { success: false, error: noTokenMsg };
+    }
+
+    this.isFetching = true;
+    this.currentError = null;
+    this.activeAbortController = new AbortController();
+
+    // Mark session as loading intelligence
+    const sessionWithLoading: PortfolioSessionState = {
+      ...currentSession,
+      intelligenceLoading: true,
+      intelligenceError: null
+    } as PortfolioSessionState;
+    setSessionState(sessionWithLoading);
+    this.notifyState(currentSession.mode);
+
+    try {
+      const result = await this.client.fetchIntelligenceSafe({
+        idToken,
+        forceRefresh: options.forceRefresh,
+        maxItemsPerAsset: options.maxItemsPerAsset,
+        signal: this.activeAbortController.signal
+      });
+
+      if (!result.success) {
+        const mappedError = this.mapCloudApiError(result.error);
+        this.currentError = mappedError;
+        const sessionWithError: PortfolioSessionState = {
+          ...currentSession,
+          intelligenceLoading: false,
+          intelligenceError: mappedError.message
+        } as PortfolioSessionState;
+        setSessionState(sessionWithError);
+        this.notifyState(currentSession.mode);
+        return { success: false, error: mappedError.message };
+      }
+
+      // Merge intelligence into active holdings
+      const enriched = integrateIntelligenceIntoHoldings(
+        currentSession.holdings,
+        result.data.response.reports
+      );
+
+      const updatedSession: PortfolioSessionState = {
+        ...currentSession,
+        holdings: enriched.enrichedHoldings,
+        summary: {
+          ...currentSession.summary,
+          reviewQueueCount: enriched.reviewQueueCount
+        },
+        intelligenceReports: result.data.response.reports,
+        intelligenceLoading: false,
+        intelligenceError: null,
+        intelligenceCached: result.data.response.cached,
+        intelligenceAsOfDate: result.data.response.as_of_date,
+        liveEvidenceFindings: enriched.liveFindings,
+        liveSourceDocuments: enriched.liveDocs
+      } as PortfolioSessionState;
+
+      setSessionState(updatedSession);
+      this.currentError = null;
+      this.notifyState(currentSession.mode);
+
+      return { success: true, state: updatedSession };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.currentError = {
+        message: `Intelligence retrieval error: ${msg}`,
+        kind: 'UNKNOWN_ERROR',
+        canRetry: true,
+        timestamp: new Date().toISOString()
+      };
+      const sessionWithError: PortfolioSessionState = {
+        ...currentSession,
+        intelligenceLoading: false,
+        intelligenceError: msg
+      } as PortfolioSessionState;
+      setSessionState(sessionWithError);
       this.notifyState(currentSession.mode);
       return { success: false, error: msg };
     } finally {

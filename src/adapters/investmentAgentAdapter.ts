@@ -29,7 +29,10 @@ import {
   AssetCategory,
   DecisionRecord,
   PortfolioSummary,
-  PortfolioCategorySummary
+  PortfolioCategorySummary,
+  AssetIntelligenceReport,
+  EvidenceFinding,
+  SourceDocument
 } from '../types/investment';
 import { DecisionEvaluationInput } from '../utils/decisionEngine';
 import { ProfitRealizationEngineInput } from '../utils/profitRealizationEngine';
@@ -682,5 +685,164 @@ export function adaptPortfolioSnapshot(
     profitRealizationInputs: profitInputs,
     validationDisclosures: disclosures,
     automatedTradeExecutionBlocked: true
+  };
+}
+
+// ============================================================================
+// 8. Phase 7: AI Asset Intelligence Integration Adapter
+// ============================================================================
+
+export interface EnrichedIntelligenceResult {
+  enrichedHoldings: Holding[];
+  liveFindings: EvidenceFinding[];
+  liveDocs: SourceDocument[];
+  reviewQueueCount: number;
+}
+
+/**
+ * Pure function that matches backend AssetIntelligenceReport records to adapted holdings,
+ * extracts verified findings into domain EvidenceFinding and SourceDocument entities,
+ * and updates reviewStatus/reviewReason based on thesis health and counter-evidence.
+ */
+export function integrateIntelligenceIntoHoldings(
+  holdings: Holding[],
+  reports: Record<string, AssetIntelligenceReport>
+): EnrichedIntelligenceResult {
+  if (!reports || typeof reports !== 'object') {
+    return {
+      enrichedHoldings: holdings,
+      liveFindings: [],
+      liveDocs: [],
+      reviewQueueCount: holdings.filter(h => h.reviewStatus === 'review_required').length
+    };
+  }
+
+  const liveFindings: EvidenceFinding[] = [];
+  const liveDocsMap = new Map<string, SourceDocument>();
+
+  const enrichedHoldings = holdings.map(holding => {
+    // Match by ticker (case insensitive) or holding id
+    const assetKey = Object.keys(reports).find(
+      k => k.toUpperCase() === holding.ticker.toUpperCase() || k.toUpperCase() === holding.id.toUpperCase()
+    );
+
+    if (!assetKey) {
+      return holding;
+    }
+
+    const report = reports[assetKey];
+    if (!report) {
+      return holding;
+    }
+
+    const holdingSupportingIds: string[] = [];
+    const holdingCounterIds: string[] = [];
+
+    // Map findings
+    if (Array.isArray(report.findings)) {
+      for (const f of report.findings) {
+        if (!f || !f.id) continue;
+
+        // Register Source Document if not already added
+        if (f.source_doc_id && !liveDocsMap.has(f.source_doc_id)) {
+          const docTitle = f.source_title || 'Statutory Disclosure / Ecosystem Event';
+          const isSec = docTitle.includes('SEC') || docTitle.includes('Form');
+          const isKap = docTitle.includes('KAP') || docTitle.includes('Kamuyu Aydınlatma');
+          const isBtc = docTitle.includes('Bitcoin') || docTitle.includes('BTC');
+
+          liveDocsMap.set(f.source_doc_id, {
+            id: f.source_doc_id,
+            title: docTitle,
+            sourceName: isSec ? 'U.S. SEC EDGAR' : isKap ? 'KAP Public Disclosure Platform' : isBtc ? 'Bitcoin Core / Ecosystem' : 'Official Primary Source',
+            sourceType: isSec ? 'SEC_FILING' : isKap ? 'KAP_DISCLOSURE' : 'ANNUAL_REPORT',
+            identifier: docTitle,
+            publicationDate: report.as_of_date || new Date().toISOString().slice(0, 10),
+            reportingPeriod: (report.as_of_date || '').slice(0, 4) || '2026',
+            url: f.source_url || undefined,
+            isAudited: f.evidence_quality === 'high_statutory',
+            verificationStatus: f.verification_status === 'verified_primary' ? 'verified_primary' : 'unverified_third_party',
+            freshnessStatus: 'fresh',
+            isSyntheticDemonstration: false,
+            notes: `Verified filing for ${f.holding_id || holding.ticker}`
+          });
+        }
+
+        const findingObj: EvidenceFinding = {
+          id: f.id,
+          holdingId: holding.id,
+          sourceDocId: f.source_doc_id,
+          claim: f.claim,
+          excerpt: f.excerpt,
+          type: f.type || 'verified_fact',
+          verificationStatus: f.verification_status === 'verified_primary' ? 'verified_primary' : 'unverified_third_party',
+          freshnessStatus: 'fresh',
+          evidenceQuality: f.evidence_quality || 'moderate_analytical',
+          confidenceNotes: f.explanation || '',
+          lastVerifiedDate: report.as_of_date || new Date().toISOString().slice(0, 10),
+          isConflicting: f.thesis_impact === 'CHALLENGES_THESIS' || f.thesis_impact === 'INVALIDATES_THESIS',
+          conflictDescription: f.thesis_impact === 'INVALIDATES_THESIS'
+            ? 'Finding materially invalidates core investment thesis.'
+            : f.thesis_impact === 'CHALLENGES_THESIS'
+            ? 'Finding challenges thesis premise or competitive moat.'
+            : undefined,
+          isSyntheticDemonstration: false,
+          supportsThesisInvalidation: f.thesis_impact === 'INVALIDATES_THESIS' || f.supports_moat_destruction,
+          supportsRiskConcern: f.materiality === 'HIGH',
+          claimModality: 'confirmed_fact',
+          claimScope: 'holding_specific'
+        };
+
+        liveFindings.push(findingObj);
+
+        if (f.thesis_impact === 'SUPPORTS_THESIS') {
+          holdingSupportingIds.push(f.id);
+        } else if (f.thesis_impact === 'CHALLENGES_THESIS' || f.thesis_impact === 'INVALIDATES_THESIS') {
+          holdingCounterIds.push(f.id);
+        }
+      }
+    }
+
+    // Determine review status
+    let updatedReviewStatus = holding.reviewStatus;
+    let updatedReviewReason = holding.reviewReason;
+
+    if (report.review_required) {
+      updatedReviewStatus = 'review_required';
+      updatedReviewReason = report.review_reason || 'AI Intelligence flagged material thesis challenge or critical health issue';
+    } else if (report.suggested_action === 'INSUFFICIENT_EVIDENCE') {
+      updatedReviewStatus = 'insufficient_evidence';
+      updatedReviewReason = report.review_reason || 'Insufficient verified statutory evidence to corroborate thesis';
+    } else if (Math.abs(holding.driftPercentage) > 2.0) {
+      updatedReviewStatus = 'review_required';
+      updatedReviewReason = updatedReviewReason || `Allocation drift of ${holding.driftPercentage > 0 ? '+' : ''}${holding.driftPercentage.toFixed(1)}pp exceeds ±2.0pp threshold`;
+    } else {
+      updatedReviewStatus = 'up_to_date';
+      updatedReviewReason = undefined;
+    }
+
+    // Merge unresolved questions without duplicates
+    const mergedQuestions = Array.from(new Set([
+      ...holding.unresolvedQuestions,
+      ...(report.unresolved_questions || [])
+    ]));
+
+    return {
+      ...holding,
+      intelligenceReport: report,
+      supportingEvidenceIds: holdingSupportingIds.length > 0 ? holdingSupportingIds : holding.supportingEvidenceIds,
+      counterevidenceIds: holdingCounterIds.length > 0 ? holdingCounterIds : holding.counterevidenceIds,
+      unresolvedQuestions: mergedQuestions,
+      reviewStatus: updatedReviewStatus,
+      reviewReason: updatedReviewReason
+    };
+  });
+
+  const reviewQueueCount = enrichedHoldings.filter(h => h.reviewStatus === 'review_required').length;
+
+  return {
+    enrichedHoldings,
+    liveFindings,
+    liveDocs: Array.from(liveDocsMap.values()),
+    reviewQueueCount
   };
 }

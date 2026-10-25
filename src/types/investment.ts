@@ -158,6 +158,9 @@ export interface Holding {
 
   // Primary decision
   decision: DecisionRecord;
+
+  // AI Intelligence Report (Phase 7)
+  intelligenceReport?: AssetIntelligenceReport;
 }
 
 export type DataSourceMode = 'synthetic_demonstration' | 'local_snapshot' | 'cloud_live';
@@ -181,6 +184,66 @@ export interface SnapshotPurchaseRecommendation {
   priority: 'HIGH' | 'MEDIUM' | 'LOW';
 }
 
+// ============================================================================
+// AI Asset Intelligence Types (Phase 7)
+// ============================================================================
+
+export type HealthStatus = 'EXCELLENT' | 'SOUND' | 'WATCHLIST' | 'CRITICAL';
+export type ThesisStatus = 'intact' | 'questionable' | 'materially_invalidated';
+export type UncertaintyLevel = 'LOW' | 'MODERATE' | 'HIGH';
+export type FindingMateriality = 'HIGH' | 'MEDIUM' | 'LOW' | 'NOISE';
+export type ThesisImpact = 'SUPPORTS_THESIS' | 'NEUTRAL' | 'CHALLENGES_THESIS' | 'INVALIDATES_THESIS';
+
+export interface AnalyzedFinding {
+  id: string; // finding-{sha256[:16]}
+  holding_id: string; // ticker
+  source_doc_id: string; // doc-{sha256[:16]}
+  claim: string;
+  excerpt: string;
+  type: 'verified_fact' | 'model_interpretation' | 'conflicting_evidence' | 'stale_evidence';
+  verification_status: 'verified_primary' | 'unverified_third_party';
+  evidence_quality: 'high_statutory' | 'moderate_analytical' | 'conflicting' | 'insufficient';
+  materiality: FindingMateriality;
+  thesis_impact: ThesisImpact;
+  supports_moat_destruction: boolean;
+  explanation: string;
+  source_url: string;
+  source_title: string;
+}
+
+export interface AssetIntelligenceReport {
+  asset: string;
+  as_of_date: string;
+  thesis_evaluated: string;
+  overall_health: HealthStatus;
+  thesis_status: ThesisStatus;
+  review_required: boolean;
+  review_reason: string | null;
+  uncertainty_level: UncertaintyLevel;
+  uncertainty_explanation: string;
+  suggested_action: 'HOLD' | 'INCREASE' | 'REDUCE' | 'SELL' | 'INSUFFICIENT_EVIDENCE';
+  findings: AnalyzedFinding[];
+  unresolved_questions: string[];
+  automated_execution_blocked: true;
+  documents_analyzed: number;
+  generation_timestamp: string;
+  model_version: string;
+}
+
+export interface IntelligenceApiResponse {
+  status: 'success' | 'error';
+  as_of_date: string;
+  cached: boolean;
+  cache_expires_at: string | null;
+  data_source: string;
+  user: string;
+  reports: Record<string, AssetIntelligenceReport>;
+  documents_ingested: number;
+  sources_contacted: string[];
+  errors: string[];
+  automated_execution_blocked: true;
+}
+
 export type PortfolioSessionState =
   | {
       mode: 'synthetic_demonstration';
@@ -191,6 +254,13 @@ export type PortfolioSessionState =
       validationDisclosures?: string[];
       provenanceFilename?: undefined;
       authenticatedUserEmail?: undefined;
+      intelligenceReports?: Record<string, AssetIntelligenceReport>;
+      intelligenceLoading?: boolean;
+      intelligenceError?: string | null;
+      intelligenceCached?: boolean;
+      intelligenceAsOfDate?: string;
+      liveEvidenceFindings?: EvidenceFinding[];
+      liveSourceDocuments?: SourceDocument[];
     }
   | {
       mode: 'local_snapshot';
@@ -201,6 +271,13 @@ export type PortfolioSessionState =
       validationDisclosures: string[];
       provenanceFilename: string;
       authenticatedUserEmail?: undefined;
+      intelligenceReports?: Record<string, AssetIntelligenceReport>;
+      intelligenceLoading?: boolean;
+      intelligenceError?: string | null;
+      intelligenceCached?: boolean;
+      intelligenceAsOfDate?: string;
+      liveEvidenceFindings?: EvidenceFinding[];
+      liveSourceDocuments?: SourceDocument[];
     }
   | {
       mode: 'cloud_live';
@@ -211,6 +288,13 @@ export type PortfolioSessionState =
       validationDisclosures: string[];
       provenanceFilename?: undefined;
       authenticatedUserEmail?: string;
+      intelligenceReports?: Record<string, AssetIntelligenceReport>;
+      intelligenceLoading?: boolean;
+      intelligenceError?: string | null;
+      intelligenceCached?: boolean;
+      intelligenceAsOfDate?: string;
+      liveEvidenceFindings?: EvidenceFinding[];
+      liveSourceDocuments?: SourceDocument[];
     };
 
 export const DEFAULT_SYNTHETIC_DATA_SOURCE: DataSourceMetadata = {

@@ -20,7 +20,8 @@ import {
   ArrowRight,
   Info,
   CheckCircle2,
-  XCircle
+  XCircle,
+  Sparkles
 } from 'lucide-react';
 
 interface AssetResearchProps {
@@ -60,20 +61,85 @@ export const AssetResearch: React.FC<AssetResearchProps> = ({
 
   // Retrieve evidence findings and source documents for this holding
   const isSyntheticMode = dataSource ? dataSource.mode === 'synthetic_demonstration' : true;
+  const intelReport = selectedHolding.intelligenceReport;
+
   const supportingFindings = isSyntheticMode
     ? SYNTHETIC_EVIDENCE_FINDINGS.filter(
         ef => ef.holdingId === selectedHolding.id && !ef.isConflicting && selectedHolding.supportingEvidenceIds.includes(ef.id)
       )
+    : intelReport
+    ? intelReport.findings
+        .filter(f => f.thesis_impact === 'SUPPORTS_THESIS')
+        .map(f => ({
+          id: f.id,
+          holdingId: selectedHolding.id,
+          sourceDocId: f.source_doc_id,
+          claim: f.claim,
+          excerpt: f.excerpt,
+          type: f.type,
+          verificationStatus: f.verification_status,
+          freshnessStatus: 'fresh' as const,
+          evidenceQuality: f.evidence_quality,
+          confidenceNotes: f.explanation,
+          lastVerifiedDate: intelReport.as_of_date,
+          isSyntheticDemonstration: false
+        }))
     : [];
 
   const counterFindings = isSyntheticMode
     ? SYNTHETIC_EVIDENCE_FINDINGS.filter(
         ef => ef.holdingId === selectedHolding.id && (ef.isConflicting || selectedHolding.counterevidenceIds.includes(ef.id))
       )
+    : intelReport
+    ? intelReport.findings
+        .filter(f => f.thesis_impact === 'CHALLENGES_THESIS' || f.thesis_impact === 'INVALIDATES_THESIS')
+        .map(f => ({
+          id: f.id,
+          holdingId: selectedHolding.id,
+          sourceDocId: f.source_doc_id,
+          claim: f.claim,
+          excerpt: f.excerpt,
+          type: f.type,
+          verificationStatus: f.verification_status,
+          freshnessStatus: 'fresh' as const,
+          evidenceQuality: f.evidence_quality,
+          confidenceNotes: f.explanation,
+          lastVerifiedDate: intelReport.as_of_date,
+          isConflicting: true,
+          conflictDescription: f.explanation,
+          isSyntheticDemonstration: false
+        }))
     : [];
 
   const getSourceDoc = (docId: string): SourceDocument | undefined => {
-    return isSyntheticMode ? SYNTHETIC_SOURCE_DOCUMENTS.find(d => d.id === docId) : undefined;
+    if (isSyntheticMode) {
+      return SYNTHETIC_SOURCE_DOCUMENTS.find(d => d.id === docId);
+    }
+    if (intelReport) {
+      const f = intelReport.findings.find(item => item.source_doc_id === docId);
+      if (f) {
+        const docTitle = f.source_title || 'Statutory Disclosure / Ecosystem Event';
+        const isSec = docTitle.includes('SEC') || docTitle.includes('Form');
+        const isKap = docTitle.includes('KAP') || docTitle.includes('Kamuyu Aydınlatma');
+        const isBtc = docTitle.includes('Bitcoin') || docTitle.includes('BTC');
+        return {
+          id: docId,
+          title: docTitle,
+          sourceName: isSec ? 'U.S. SEC EDGAR' : isKap ? 'KAP Public Disclosure Platform' : isBtc ? 'Bitcoin Core / Ecosystem' : 'Official Primary Source',
+          sourceType: isSec ? 'SEC_FILING' : isKap ? 'KAP_DISCLOSURE' : 'ANNUAL_REPORT',
+          identifier: docTitle,
+          publicationDate: intelReport.as_of_date,
+          reportingPeriod: (intelReport.as_of_date || '').slice(0, 4) || '2026',
+          url: f.source_url || undefined,
+          isAudited: f.evidence_quality === 'high_statutory',
+          verificationStatus: f.verification_status,
+          freshnessStatus: 'fresh',
+          isSyntheticDemonstration: false,
+          notes: f.explanation
+        };
+      }
+    }
+    return undefined;
   };
 
   const isTRY = selectedHolding.currency === 'TRY';
@@ -287,6 +353,112 @@ export const AssetResearch: React.FC<AssetResearchProps> = ({
           </button>
         </div>
       </div>
+
+      {/* AI Asset Health & Intelligence Dossier (Phase 7) */}
+      {intelReport && (
+        <div className="rounded-lg border border-sky-800/60 bg-gradient-to-br from-slate-900/90 via-slate-900/60 to-sky-950/20 p-6 space-y-4 shadow-lg">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-md bg-sky-950 border border-sky-700/60 flex items-center justify-center text-sky-400">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+                  <span>AI Asset Health & Statutory Intelligence</span>
+                  <span className="text-[10px] font-mono font-normal text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">
+                    {intelReport.model_version}
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Evaluated against official SEC EDGAR, KAP disclosures, and primary records.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <span className={`px-2.5 py-1 rounded text-xs font-mono font-bold uppercase tracking-wider border ${
+                intelReport.overall_health === 'EXCELLENT' ? 'bg-emerald-950 text-emerald-300 border-emerald-700' :
+                intelReport.overall_health === 'SOUND' ? 'bg-sky-950 text-sky-300 border-sky-700' :
+                intelReport.overall_health === 'WATCHLIST' ? 'bg-amber-950 text-amber-300 border-amber-700' :
+                'bg-rose-950 text-rose-300 border-rose-700'
+              }`}>
+                Health: {intelReport.overall_health}
+              </span>
+
+              <span className={`px-2 py-1 rounded text-xs font-mono font-medium border ${
+                intelReport.thesis_status === 'intact' ? 'bg-emerald-950/40 text-emerald-300 border-emerald-800/60' :
+                intelReport.thesis_status === 'questionable' ? 'bg-amber-950/40 text-amber-300 border-amber-800/60' :
+                'bg-rose-950/40 text-rose-300 border-rose-800/60'
+              }`}>
+                {intelReport.thesis_status === 'intact' ? 'Thesis Intact' :
+                 intelReport.thesis_status === 'questionable' ? 'Thesis Questionable' :
+                 'Materially Invalidated'}
+              </span>
+            </div>
+          </div>
+
+          {/* Review Required Warning Banner */}
+          {intelReport.review_required && (
+            <div className="bg-amber-950/40 border border-amber-700/80 rounded-md p-3 text-xs text-amber-200 flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-semibold text-amber-300">Human Decision Review Required</div>
+                <div className="text-amber-200/90 mt-0.5">
+                  {intelReport.review_reason || 'AI intelligence flagged an emerging risk or thesis divergence.'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Health Assessment Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div className="p-3 rounded bg-slate-950/60 border border-slate-800/80 space-y-1">
+              <span className="text-[11px] text-slate-400">Suggested Action</span>
+              <div className="font-mono font-bold text-white text-sm">
+                {intelReport.suggested_action}
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Rule-governed recommendation based on evaluated evidence.
+              </p>
+            </div>
+
+            <div className="p-3 rounded bg-slate-950/60 border border-slate-800/80 space-y-1">
+              <span className="text-[11px] text-slate-400">Uncertainty Level</span>
+              <div className="font-mono font-bold text-slate-200 text-sm">
+                {intelReport.uncertainty_level}
+              </div>
+              <p className="text-[11px] text-slate-400 line-clamp-2">
+                {intelReport.uncertainty_explanation || 'No material evidence gaps noted.'}
+              </p>
+            </div>
+
+            <div className="p-3 rounded bg-slate-950/60 border border-slate-800/80 space-y-1">
+              <span className="text-[11px] text-slate-400">Filings Analyzed</span>
+              <div className="font-mono font-bold text-sky-400 text-sm">
+                {intelReport.documents_analyzed} Documents
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Audit Date: {intelReport.as_of_date} · Automated Execution Blocked
+              </p>
+            </div>
+          </div>
+
+          {/* Unresolved Questions */}
+          {intelReport.unresolved_questions && intelReport.unresolved_questions.length > 0 && (
+            <div className="pt-2 border-t border-slate-800/60 space-y-1">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <HelpCircle className="w-3.5 h-3.5 text-slate-500" />
+                Unresolved Diligence Questions
+              </span>
+              <ul className="list-disc list-inside text-xs text-slate-300 space-y-0.5">
+                {intelReport.unresolved_questions.map((q, idx) => (
+                  <li key={idx} className="leading-relaxed">{q}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Grid: Thesis & Moat vs Valuation Metrics */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

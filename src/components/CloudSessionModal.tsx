@@ -23,7 +23,8 @@ import {
   Layers,
   FileText,
   DollarSign,
-  Loader2
+  Loader2,
+  Sparkles
 } from 'lucide-react';
 import { CloudSessionManager, CloudSessionManagerState } from '../services/cloudSessionManager';
 import { PortfolioSessionState } from '../types/investment';
@@ -54,6 +55,8 @@ export const CloudSessionModal: React.FC<CloudSessionModalProps> = ({
   }));
 
   const [budgetInput, setBudgetInput] = useState<string>('');
+  const [forceRefreshIntel, setForceRefreshIntel] = useState(false);
+  const [isIntelligenceFetching, setIsIntelligenceFetching] = useState(false);
   const googleBtnRef = useRef<HTMLDivElement | null>(null);
   const cloudConfig = getCloudConfig();
 
@@ -97,6 +100,17 @@ export const CloudSessionModal: React.FC<CloudSessionModalProps> = ({
     await sessionManager.loadCloudPortfolio(sessionState, onSessionStateChange, {
       budget: budgetNum
     });
+  };
+
+  const handleFetchIntelligence = async () => {
+    setIsIntelligenceFetching(true);
+    try {
+      await sessionManager.fetchCloudIntelligence(sessionState, onSessionStateChange, {
+        forceRefresh: forceRefreshIntel
+      });
+    } finally {
+      setIsIntelligenceFetching(false);
+    }
   };
 
   const handleSignOut = () => {
@@ -381,6 +395,88 @@ export const CloudSessionModal: React.FC<CloudSessionModalProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Phase 7: AI Asset Intelligence & News Feed Section */}
+          {isCloudLive && (
+            <div className="bg-slate-950/70 border border-sky-900/60 rounded-lg p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold text-sky-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-sky-400" />
+                  <span>AI Asset Intelligence & News Feed (GET /api/intelligence)</span>
+                </div>
+                {sessionState.intelligenceAsOfDate && (
+                  <span className="text-[10px] font-mono text-slate-400">
+                    As of: {sessionState.intelligenceAsOfDate}
+                    {sessionState.intelligenceCached ? ' (Cached)' : ' (Live)'}
+                  </span>
+                )}
+              </div>
+
+              <p className="text-xs text-slate-400">
+                Pulls SEC EDGAR (Form 10-K/10-Q/8-K), KAP filings, and Bitcoin ecosystem disclosures, evaluating claims against investment theses via Gemini.
+              </p>
+
+              {sessionState.intelligenceReports && Object.keys(sessionState.intelligenceReports).length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  {Object.entries(sessionState.intelligenceReports).map(([ticker, rep]) => (
+                    <div key={ticker} className="p-2 rounded bg-slate-900 border border-slate-800 space-y-0.5">
+                      <div className="flex items-center justify-between font-mono font-bold text-white">
+                        <span>{ticker}</span>
+                        <span className={`text-[10px] px-1 py-0.2 rounded border ${
+                          rep.overall_health === 'EXCELLENT' ? 'text-emerald-400 border-emerald-800' :
+                          rep.overall_health === 'SOUND' ? 'text-sky-400 border-sky-800' :
+                          rep.overall_health === 'WATCHLIST' ? 'text-amber-400 border-amber-800' :
+                          'text-rose-400 border-rose-800'
+                        }`}>
+                          {rep.overall_health}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 capitalize">
+                        {rep.thesis_status.replace('_', ' ')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {sessionState.intelligenceError && (
+                <div className="bg-rose-950/60 border border-rose-800 rounded p-2.5 text-xs text-rose-200 flex items-start gap-2">
+                  <AlertOctagon className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <div className="font-mono text-[11px]">{sessionState.intelligenceError}</div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-1">
+                <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={forceRefreshIntel}
+                    onChange={(e) => setForceRefreshIntel(e.target.checked)}
+                    className="rounded border-slate-700 bg-slate-900 text-sky-500 focus:ring-0 focus:ring-offset-0"
+                  />
+                  <span>Bypass 6h Cache (Force Refresh)</span>
+                </label>
+
+                <button
+                  onClick={handleFetchIntelligence}
+                  disabled={!managerState.hasToken || managerState.isFetching || isIntelligenceFetching}
+                  className="px-3 py-1.5 text-xs font-bold text-white bg-sky-600 hover:bg-sky-500 disabled:bg-slate-800 disabled:text-slate-500 rounded border border-sky-500/50 flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  {isIntelligenceFetching ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Analyzing Intelligence...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>{sessionState.intelligenceReports ? 'Refresh AI Intelligence' : 'Fetch AI Intelligence'}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Modal Footer Safeguards */}

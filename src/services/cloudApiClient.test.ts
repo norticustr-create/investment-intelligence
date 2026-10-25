@@ -424,4 +424,145 @@ describe('CloudApiClient (Mock-Only Test Suite)', () => {
     }
   });
 
+  // ==========================================================================
+  // Phase 7: fetchIntelligence and fetchIntelligenceSafe Tests
+  // ==========================================================================
+
+  it('fetchIntelligence sends correct Authorization, handles query params, and returns reports', async () => {
+    let capturedUrl = '';
+    let capturedHeaders: HeadersInit | undefined;
+
+    const mockResponsePayload = {
+      status: 'success',
+      as_of_date: '2026-02-25',
+      cached: false,
+      cache_expires_at: null,
+      data_source: 'sheets',
+      user: 'investor@example.com',
+      reports: {
+        NVDA: {
+          asset: 'NVDA',
+          as_of_date: '2026-02-25',
+          thesis_evaluated: 'AI hardware infrastructure',
+          overall_health: 'EXCELLENT',
+          thesis_status: 'intact',
+          review_required: false,
+          review_reason: null,
+          uncertainty_level: 'LOW',
+          uncertainty_explanation: 'Strong primary statutory 10-K disclosures.',
+          suggested_action: 'HOLD',
+          findings: [
+            {
+              id: 'finding-001',
+              holding_id: 'NVDA',
+              source_doc_id: 'doc-001',
+              claim: 'Data center revenue accelerated 112% year-over-year',
+              excerpt: 'Data Center compute revenue grew significantly.',
+              type: 'verified_fact',
+              verification_status: 'verified_primary',
+              evidence_quality: 'high_statutory',
+              materiality: 'HIGH',
+              thesis_impact: 'SUPPORTS_THESIS',
+              supports_moat_destruction: false,
+              explanation: 'Audited statutory 10-K SEC filing confirms high datacenter growth.',
+              source_url: 'https://www.sec.gov/edgar/data/1045810/nvda-10k.htm',
+              source_title: 'SEC Form 10-K FY2026'
+            }
+          ],
+          unresolved_questions: [],
+          automated_execution_blocked: true,
+          documents_analyzed: 3,
+          generation_timestamp: '2026-02-25T14:30:00Z',
+          model_version: 'gemini-2.5-pro'
+        }
+      },
+      documents_ingested: 3,
+      sources_contacted: ['SEC EDGAR'],
+      errors: [],
+      automated_execution_blocked: true
+    };
+
+    const mockFetch: typeof fetch = async (input, init) => {
+      capturedUrl = String(input);
+      capturedHeaders = init?.headers;
+      return new Response(JSON.stringify(mockResponsePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    const client = createCloudApiClient({
+      baseUrl: 'https://cloud-api.test',
+      fetchFn: mockFetch
+    });
+
+    const result = await client.fetchIntelligenceSafe({
+      idToken: 'test_bearer_token_123',
+      forceRefresh: true,
+      maxItemsPerAsset: 5
+    });
+
+    assert.equal(result.success, true);
+    if (result.success) {
+      assert.equal(result.data.response.status, 'success');
+      assert.equal(result.data.response.automated_execution_blocked, true);
+      assert.equal(result.data.response.reports.NVDA.overall_health, 'EXCELLENT');
+      assert.equal(result.data.response.reports.NVDA.findings.length, 1);
+    }
+
+    assert.match(capturedUrl, /force_refresh=true/);
+    assert.match(capturedUrl, /max_items_per_asset=5/);
+    const headers = capturedHeaders as Record<string, string>;
+    assert.equal(headers['Authorization'], 'Bearer test_bearer_token_123');
+  });
+
+  it('fetchIntelligenceSafe validates security invariant: automated_execution_blocked must be true', async () => {
+    const maliciousPayload = {
+      status: 'success',
+      as_of_date: '2026-02-25',
+      cached: false,
+      cache_expires_at: null,
+      data_source: 'sheets',
+      user: 'investor@example.com',
+      reports: {},
+      documents_ingested: 0,
+      sources_contacted: [],
+      errors: [],
+      automated_execution_blocked: false // Security violation
+    };
+
+    const mockFetch: typeof fetch = async () => {
+      return new Response(JSON.stringify(maliciousPayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    const client = createCloudApiClient({ fetchFn: mockFetch });
+    const result = await client.fetchIntelligenceSafe({ idToken: 'valid_tok' });
+
+    assert.equal(result.success, false);
+    if (!result.success) {
+      assert.equal(result.error.kind, 'SECURITY_INVARIANT_VIOLATION');
+    }
+  });
+
+  it('fetchIntelligenceSafe catches 403 Forbidden with typed error without throwing', async () => {
+    const mockFetch: typeof fetch = async () => {
+      return new Response(JSON.stringify({ detail: 'User email unauthorized' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    const client = createCloudApiClient({ fetchFn: mockFetch });
+    const result = await client.fetchIntelligenceSafe({ idToken: 'unauthorized_token' });
+
+    assert.equal(result.success, false);
+    if (!result.success) {
+      assert.equal(result.error.kind, 'FORBIDDEN');
+      assert.equal(result.error.status, 403);
+    }
+  });
+
 });

@@ -36,14 +36,88 @@ export const EvidenceExplorer: React.FC<EvidenceExplorerProps> = ({
   onInspectDocument,
   dataSource
 }) => {
-  const isReal = dataSource?.mode === 'local_snapshot';
+  const isReal = dataSource?.mode === 'local_snapshot' || dataSource?.mode === 'cloud_live';
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedHoldingFilter, setSelectedHoldingFilter] = useState<string>('all');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>('all');
   const [activeTab, setActiveTab] = useState<'claims' | 'documents'>('claims');
 
-  const claimsSource = isReal ? [] : SYNTHETIC_EVIDENCE_FINDINGS;
-  const docsSource = isReal ? [] : SYNTHETIC_SOURCE_DOCUMENTS;
+  // Extract live intelligence findings and documents if present on holdings
+  const liveReports = holdings
+    .map(h => h.intelligenceReport)
+    .filter((r): r is NonNullable<typeof r> => Boolean(r));
+
+  const hasLiveIntelligence = liveReports.length > 0;
+
+  const liveClaims: EvidenceFinding[] = [];
+  const liveDocsMap = new Map<string, SourceDocument>();
+
+  if (hasLiveIntelligence) {
+    for (const report of liveReports) {
+      if (Array.isArray(report.findings)) {
+        for (const f of report.findings) {
+          if (!f || !f.id) continue;
+          if (f.source_doc_id && !liveDocsMap.has(f.source_doc_id)) {
+            const docTitle = f.source_title || 'Statutory Disclosure / Ecosystem Event';
+            const isSec = docTitle.includes('SEC') || docTitle.includes('Form');
+            const isKap = docTitle.includes('KAP') || docTitle.includes('Kamuyu Aydınlatma');
+            const isBtc = docTitle.includes('Bitcoin') || docTitle.includes('BTC');
+
+            liveDocsMap.set(f.source_doc_id, {
+              id: f.source_doc_id,
+              title: docTitle,
+              sourceName: isSec ? 'U.S. SEC EDGAR' : isKap ? 'KAP Public Disclosure Platform' : isBtc ? 'Bitcoin Core / Ecosystem' : 'Official Primary Source',
+              sourceType: isSec ? 'SEC_FILING' : isKap ? 'KAP_DISCLOSURE' : 'ANNUAL_REPORT',
+              identifier: docTitle,
+              publicationDate: report.as_of_date || new Date().toISOString().slice(0, 10),
+              reportingPeriod: (report.as_of_date || '').slice(0, 4) || '2026',
+              url: f.source_url || undefined,
+              isAudited: f.evidence_quality === 'high_statutory',
+              verificationStatus: f.verification_status,
+              freshnessStatus: 'fresh',
+              isSyntheticDemonstration: false,
+              notes: f.explanation
+            });
+          }
+
+          liveClaims.push({
+            id: f.id,
+            holdingId: f.holding_id,
+            sourceDocId: f.source_doc_id,
+            claim: f.claim,
+            excerpt: f.excerpt,
+            type: f.type,
+            verificationStatus: f.verification_status,
+            freshnessStatus: 'fresh',
+            evidenceQuality: f.evidence_quality,
+            confidenceNotes: f.explanation,
+            lastVerifiedDate: report.as_of_date,
+            isConflicting: f.thesis_impact === 'CHALLENGES_THESIS' || f.thesis_impact === 'INVALIDATES_THESIS',
+            conflictDescription: f.explanation,
+            isSyntheticDemonstration: false,
+            supportsThesisInvalidation: f.thesis_impact === 'INVALIDATES_THESIS' || f.supports_moat_destruction,
+            supportsRiskConcern: f.materiality === 'HIGH',
+            claimModality: 'confirmed_fact',
+            claimScope: 'holding_specific'
+          });
+        }
+      }
+    }
+  }
+
+  const isSyntheticMode = !dataSource || dataSource.mode === 'synthetic_demonstration';
+
+  const claimsSource: EvidenceFinding[] = hasLiveIntelligence
+    ? liveClaims
+    : isSyntheticMode
+    ? SYNTHETIC_EVIDENCE_FINDINGS
+    : [];
+
+  const docsSource: SourceDocument[] = hasLiveIntelligence
+    ? Array.from(liveDocsMap.values())
+    : isSyntheticMode
+    ? SYNTHETIC_SOURCE_DOCUMENTS
+    : [];
 
   // Filter Claims
   const filteredClaims = claimsSource.filter(finding => {
@@ -118,7 +192,29 @@ export const EvidenceExplorer: React.FC<EvidenceExplorerProps> = ({
         </div>
       </div>
 
-      {isReal && (
+      {hasLiveIntelligence ? (
+        <div className="rounded-lg border border-sky-800/80 bg-sky-950/30 p-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-sky-900/60 border border-sky-700/60 flex items-center justify-center text-sky-400 shrink-0">
+              <ShieldCheck className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-white flex items-center gap-2">
+                <span>Verified Live Statutory Intelligence Feed</span>
+                <span className="text-[10px] font-mono font-normal text-sky-300 bg-sky-900/40 px-2 py-0.5 rounded border border-sky-700/50">
+                  {docsSource.length} Primary Documents Ingested
+                </span>
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Claims normalized from SEC EDGAR, KAP public disclosures, and primary records with automated execution blocked.
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-mono font-semibold text-emerald-400 shrink-0 hidden sm:inline">
+            {claimsSource.length} Live Findings
+          </span>
+        </div>
+      ) : isReal ? (
         <div className="rounded-lg border border-sky-900/50 bg-sky-950/20 p-6 text-center space-y-2">
           <Info className="w-6 h-6 mx-auto text-sky-400" />
           <h3 className="text-sm font-semibold text-sky-200">Local Snapshot Mode · No Regulatory Filings Uploaded</h3>
@@ -126,7 +222,7 @@ export const EvidenceExplorer: React.FC<EvidenceExplorerProps> = ({
             The active portfolio snapshot represents real holdings and purchase allocation recommendations exported from your local investment engine. No statutory SEC/KAP regulatory disclosures or audited statements have been ingested for these positions.
           </p>
         </div>
-      )}
+      ) : null}
 
       {/* Filter and Search Bar */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 bg-slate-900/60 p-4 rounded-lg border border-slate-800">

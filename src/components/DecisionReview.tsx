@@ -392,6 +392,17 @@ export const DecisionReview: React.FC<DecisionReviewProps> = ({
                   </div>
 
                   <div className="flex items-center gap-3 shrink-0">
+                    {h.intelligenceReport && (
+                      <span className={`px-2.5 py-1 rounded font-mono font-bold text-[11px] tracking-wider uppercase border ${
+                        h.intelligenceReport.overall_health === 'EXCELLENT' ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700' :
+                        h.intelligenceReport.overall_health === 'SOUND' ? 'bg-sky-950/80 text-sky-300 border-sky-700' :
+                        h.intelligenceReport.overall_health === 'WATCHLIST' ? 'bg-amber-950/80 text-amber-300 border-amber-700' :
+                        'bg-rose-950/80 text-rose-300 border-rose-700'
+                      }`} title={`AI Statutory Intelligence Health: ${h.intelligenceReport.overall_health}`}>
+                        AI: {h.intelligenceReport.overall_health}
+                      </span>
+                    )}
+
                     <span className={`px-3 py-1.5 rounded font-mono font-bold text-xs tracking-wider uppercase ${
                       isHold ? 'bg-slate-800 text-slate-100 border border-slate-700' :
                       isIncrease ? 'bg-emerald-950 text-emerald-300 border border-emerald-700' :
@@ -412,6 +423,37 @@ export const DecisionReview: React.FC<DecisionReviewProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {/* AI Intelligence Health & Review Row */}
+                {h.intelligenceReport && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded bg-slate-950/70 border border-slate-800 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-300">Thesis Status:</span>
+                      <span className={`font-mono font-bold uppercase text-[11px] ${
+                        h.intelligenceReport.thesis_status === 'intact' ? 'text-emerald-400' :
+                        h.intelligenceReport.thesis_status === 'questionable' ? 'text-amber-400' :
+                        'text-rose-400'
+                      }`}>
+                        {h.intelligenceReport.thesis_status}
+                      </span>
+                      <span className="text-slate-600">·</span>
+                      <span className="text-slate-400">
+                        {h.intelligenceReport.documents_analyzed} primary docs evaluated
+                      </span>
+                      <span className="text-slate-600">·</span>
+                      <span className="text-slate-400 font-mono text-[11px]">
+                        Uncertainty: {h.intelligenceReport.uncertainty_level}
+                      </span>
+                    </div>
+
+                    {h.reviewStatus === 'review_required' && h.reviewReason && (
+                      <div className="text-amber-300 font-medium text-[11px] flex items-center gap-1">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>{h.reviewReason}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Core Rationale */}
                 <div>

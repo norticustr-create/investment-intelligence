@@ -16,8 +16,10 @@ import {
   mapSnapshotCategory,
   mapTradingCurrency,
   SnapshotValidationError,
-  InvestmentAgentPortfolioSnapshot
+  InvestmentAgentPortfolioSnapshot,
+  integrateIntelligenceIntoHoldings
 } from './investmentAgentAdapter';
+import { AssetIntelligenceReport } from '../types/investment';
 
 function createValidSnapshotFixture(): InvestmentAgentPortfolioSnapshot {
   return {
@@ -539,6 +541,129 @@ describe('investmentAgentAdapter', () => {
       adaptPortfolioSnapshot(fixture);
 
       assert.deepEqual(fixture, copyBefore);
+    });
+  });
+
+  describe('integrateIntelligenceIntoHoldings (Phase 7)', () => {
+    it('integrates intelligence reports into holdings, maps evidence findings, and updates review status', () => {
+      const fixture = createValidSnapshotFixture();
+      const { holdings } = adaptPortfolioSnapshot(fixture);
+
+      const mockReports: Record<string, AssetIntelligenceReport> = {
+        NVDA: {
+          asset: 'NVDA',
+          as_of_date: '2026-02-25',
+          thesis_evaluated: 'AI compute',
+          overall_health: 'SOUND',
+          thesis_status: 'questionable',
+          review_required: true,
+          review_reason: 'Antitrust probe initiated by DOJ into datacenter networking bundling',
+          uncertainty_level: 'MODERATE',
+          uncertainty_explanation: 'DOJ investigation status unconfirmed in primary 10-K.',
+          suggested_action: 'HOLD',
+          findings: [
+            {
+              id: 'f-nvda-1',
+              holding_id: 'NVDA',
+              source_doc_id: 'doc-sec-1',
+              claim: 'Data center margins expanded to 75%',
+              excerpt: 'Gross margins for Data Center reached 75.1%.',
+              type: 'verified_fact',
+              verification_status: 'verified_primary',
+              evidence_quality: 'high_statutory',
+              materiality: 'HIGH',
+              thesis_impact: 'SUPPORTS_THESIS',
+              supports_moat_destruction: false,
+              explanation: 'Audited statutory numbers from Form 10-K.',
+              source_url: 'https://sec.gov/nvda-10k',
+              source_title: 'SEC Form 10-K FY2026'
+            },
+            {
+              id: 'f-nvda-2',
+              holding_id: 'NVDA',
+              source_doc_id: 'doc-regulatory-1',
+              claim: 'DOJ opened preliminary review into interconnect exclusivity',
+              excerpt: 'Regulators requested information regarding software locks.',
+              type: 'conflicting_evidence',
+              verification_status: 'unverified_third_party',
+              evidence_quality: 'conflicting',
+              materiality: 'MEDIUM',
+              thesis_impact: 'CHALLENGES_THESIS',
+              supports_moat_destruction: false,
+              explanation: 'Third-party reports cite pending DOJ review.',
+              source_url: 'https://news.example.com/nvda-probe',
+              source_title: 'Market Investigation Release'
+            }
+          ],
+          unresolved_questions: ['Will DOJ probe result in formal consent decree?'],
+          automated_execution_blocked: true,
+          documents_analyzed: 2,
+          generation_timestamp: '2026-02-25T14:00:00Z',
+          model_version: 'gemini-2.5-pro'
+        }
+      };
+
+      const result = integrateIntelligenceIntoHoldings(holdings, mockReports);
+
+      assert.equal(result.enrichedHoldings.length, holdings.length);
+      const nvda = result.enrichedHoldings.find(h => h.ticker === 'NVDA');
+      assert.ok(nvda, 'NVDA holding must exist');
+      assert.equal(nvda?.intelligenceReport?.overall_health, 'SOUND');
+      assert.equal(nvda?.reviewStatus, 'review_required');
+      assert.equal(nvda?.reviewReason, 'Antitrust probe initiated by DOJ into datacenter networking bundling');
+
+      // Verify supporting & counter evidence separation
+      assert.deepEqual(nvda?.supportingEvidenceIds, ['f-nvda-1']);
+      assert.deepEqual(nvda?.counterevidenceIds, ['f-nvda-2']);
+
+      // Verify unresolved questions merged
+      assert.ok(nvda?.unresolvedQuestions.includes('Will DOJ probe result in formal consent decree?'));
+
+      // Verify live findings & documents extracted
+      assert.equal(result.liveFindings.length, 2);
+      assert.equal(result.liveDocs.length, 2);
+      assert.ok(result.reviewQueueCount >= 1);
+    });
+
+    it('sets reviewStatus to insufficient_evidence when suggested_action is INSUFFICIENT_EVIDENCE', () => {
+      const fixture = createValidSnapshotFixture();
+      const { holdings } = adaptPortfolioSnapshot(fixture);
+
+      const mockReports: Record<string, AssetIntelligenceReport> = {
+        SPYM: {
+          asset: 'SPYM',
+          as_of_date: '2026-02-25',
+          thesis_evaluated: 'S&P 500 ETF',
+          overall_health: 'SOUND',
+          thesis_status: 'intact',
+          review_required: false,
+          review_reason: null,
+          uncertainty_level: 'HIGH',
+          uncertainty_explanation: 'No filings indexed',
+          suggested_action: 'INSUFFICIENT_EVIDENCE',
+          findings: [],
+          unresolved_questions: [],
+          automated_execution_blocked: true,
+          documents_analyzed: 0,
+          generation_timestamp: '2026-02-25T14:00:00Z',
+          model_version: 'gemini-2.5-pro'
+        }
+      };
+
+      const result = integrateIntelligenceIntoHoldings(holdings, mockReports);
+      const spym = result.enrichedHoldings.find(h => h.ticker === 'SPYM');
+      assert.ok(spym);
+      assert.equal(spym?.reviewStatus, 'insufficient_evidence');
+    });
+
+    it('handles empty or missing reports gracefully without mutating holdings', () => {
+      const fixture = createValidSnapshotFixture();
+      const { holdings } = adaptPortfolioSnapshot(fixture);
+
+      const result = integrateIntelligenceIntoHoldings(holdings, {} as Record<string, AssetIntelligenceReport>);
+      assert.equal(result.enrichedHoldings.length, holdings.length);
+      assert.equal(result.liveFindings.length, 0);
+      assert.equal(result.liveDocs.length, 0);
     });
   });
 });

@@ -29,7 +29,8 @@ import {
 } from '../adapters/investmentAgentAdapter';
 import {
   PortfolioSessionState,
-  DataSourceMetadata
+  DataSourceMetadata,
+  IntelligenceApiResponse
 } from '../types/investment';
 
 export type CloudApiErrorKind =
@@ -89,6 +90,27 @@ export type CloudSnapshotFetchResult =
   | {
       success: true;
       data: CloudSnapshotSuccess;
+    }
+  | {
+      success: false;
+      error: CloudApiError;
+    };
+
+export interface FetchCloudIntelligenceOptions {
+  idToken: string;
+  forceRefresh?: boolean;
+  maxItemsPerAsset?: number;
+  signal?: AbortSignal;
+}
+
+export interface CloudIntelligenceSuccess {
+  response: IntelligenceApiResponse;
+}
+
+export type CloudIntelligenceFetchResult =
+  | {
+      success: true;
+      data: CloudIntelligenceSuccess;
     }
   | {
       success: false;
@@ -331,6 +353,184 @@ export class CloudApiClient {
   public async fetchSnapshotSafe(options: FetchCloudSnapshotOptions): Promise<CloudSnapshotFetchResult> {
     try {
       const data = await this.fetchSnapshot(options);
+      return { success: true, data };
+    } catch (err: unknown) {
+      if (err instanceof CloudApiError) {
+        return { success: false, error: err };
+      }
+      return {
+        success: false,
+        error: new CloudApiError(
+          err instanceof Error ? err.message : String(err),
+          'CLIENT_ERROR',
+          undefined,
+          err
+        )
+      };
+    }
+  }
+
+  /**
+   * Fetches the protected asset intelligence report from GET /api/intelligence.
+   * Throws typed CloudApiError on any failure.
+   */
+  public async fetchIntelligence(options: FetchCloudIntelligenceOptions): Promise<CloudIntelligenceSuccess> {
+    if (!options || typeof options !== 'object') {
+      throw new CloudApiError('Options object must be provided.', 'CLIENT_ERROR');
+    }
+
+    if (!options.idToken || typeof options.idToken !== 'string' || !options.idToken.trim()) {
+      throw new CloudApiError('Authorization token is required and cannot be empty.', 'INVALID_TOKEN');
+    }
+    const cleanToken = options.idToken.trim();
+
+    // Construct URL with optional query parameters
+    const endpoint = this.baseUrl ? `${this.baseUrl}/api/intelligence` : '/api/intelligence';
+    const dummyBase = 'http://localhost';
+    const urlObj = new URL(endpoint, dummyBase);
+
+    if (options.forceRefresh) {
+      urlObj.searchParams.set('force_refresh', 'true');
+    }
+    if (options.maxItemsPerAsset !== undefined && Number.isFinite(options.maxItemsPerAsset) && options.maxItemsPerAsset > 0) {
+      urlObj.searchParams.set('max_items_per_asset', String(Math.floor(options.maxItemsPerAsset)));
+    }
+
+    const url = this.baseUrl ? urlObj.toString() : `${urlObj.pathname}${urlObj.search}`;
+
+    // Setup Timeout & AbortSignal
+    const controller = new AbortController();
+    let timeoutTriggered = false;
+    const timeoutId = setTimeout(() => {
+      timeoutTriggered = true;
+      controller.abort();
+    }, this.timeoutMs);
+
+    const callerSignal = options.signal;
+    const abortListener = () => {
+      controller.abort();
+    };
+
+    if (callerSignal) {
+      if (callerSignal.aborted) {
+        clearTimeout(timeoutId);
+        throw new CloudApiError('Request was aborted prior to execution.', 'NETWORK_ERROR');
+      }
+      callerSignal.addEventListener('abort', abortListener);
+    }
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${cleanToken}`,
+          'Accept': 'application/json'
+        },
+        signal: controller.signal
+      });
+    } catch (err: unknown) {
+      if (timeoutTriggered) {
+        throw new CloudApiError(
+          `Intelligence request to ${url} timed out after ${this.timeoutMs}ms.`,
+          'TIMEOUT',
+          undefined,
+          err
+        );
+      }
+      if (callerSignal?.aborted) {
+        throw new CloudApiError(
+          'Intelligence request was cancelled by user.',
+          'NETWORK_ERROR',
+          undefined,
+          err
+        );
+      }
+      throw new CloudApiError(
+        `Network error during request to ${url}: ${err instanceof Error ? err.message : String(err)}`,
+        'NETWORK_ERROR',
+        undefined,
+        err
+      );
+    } finally {
+      clearTimeout(timeoutId);
+      if (callerSignal) {
+        callerSignal.removeEventListener('abort', abortListener);
+      }
+    }
+
+    if (!response.ok) {
+      let errorBody: unknown = null;
+      try {
+        errorBody = await response.json();
+      } catch {
+        // Non-JSON body
+      }
+
+      const detailMsg = (errorBody && typeof errorBody === 'object' && 'detail' in errorBody)
+        ? String((errorBody as { detail: unknown }).detail)
+        : (errorBody && typeof errorBody === 'object' && 'message' in errorBody)
+        ? String((errorBody as { message: unknown }).message)
+        : `HTTP ${response.status} ${response.statusText}`;
+
+      switch (response.status) {
+        case 401:
+          throw new CloudApiError(`Authentication failed: ${detailMsg}`, 'UNAUTHORIZED', 401, errorBody);
+        case 403:
+          throw new CloudApiError(`Access forbidden: ${detailMsg}`, 'FORBIDDEN', 403, errorBody);
+        case 422:
+          throw new CloudApiError(`Invalid request: ${detailMsg}`, 'CLIENT_ERROR', 422, errorBody);
+        case 503:
+          throw new CloudApiError(`Cloud service unavailable: ${detailMsg}`, 'SERVICE_UNAVAILABLE', 503, errorBody);
+        default:
+          if (response.status >= 500) {
+            throw new CloudApiError(`Cloud server error (${response.status}): ${detailMsg}`, 'SERVER_ERROR', response.status, errorBody);
+          }
+          throw new CloudApiError(`Client request error (${response.status}): ${detailMsg}`, 'CLIENT_ERROR', response.status, errorBody);
+      }
+    }
+
+    let rawJson: unknown;
+    try {
+      rawJson = await response.json();
+    } catch (err: unknown) {
+      throw new CloudApiError(
+        `Failed to parse response from ${url} as JSON: ${err instanceof Error ? err.message : String(err)}`,
+        'INVALID_RESPONSE',
+        response.status,
+        err
+      );
+    }
+
+    const payload = rawJson as Partial<IntelligenceApiResponse>;
+    if (!payload || typeof payload !== 'object' || !payload.reports || typeof payload.reports !== 'object') {
+      throw new CloudApiError(
+        'Invalid intelligence API response: missing or malformed reports dictionary.',
+        'SCHEMA_VALIDATION_ERROR',
+        response.status,
+        payload
+      );
+    }
+
+    if (payload.automated_execution_blocked !== true) {
+      throw new CloudApiError(
+        'Security Invariant Violation: automated_execution_blocked must be true.',
+        'SECURITY_INVARIANT_VIOLATION',
+        response.status
+      );
+    }
+
+    return {
+      response: payload as IntelligenceApiResponse
+    };
+  }
+
+  /**
+   * Safe execution wrapper for intelligence requests. Never throws.
+   */
+  public async fetchIntelligenceSafe(options: FetchCloudIntelligenceOptions): Promise<CloudIntelligenceFetchResult> {
+    try {
+      const data = await this.fetchIntelligence(options);
       return { success: true, data };
     } catch (err: unknown) {
       if (err instanceof CloudApiError) {
